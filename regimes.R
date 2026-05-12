@@ -1,7 +1,7 @@
 library(dplyr, exclude = c("filter","lag"))
-library(quantmod)
 library(tidyr)
-library(xts)
+library(zoo)
+library(seasonal)
 
 zip_files <- as.list(list.files(path = "DATA", 
                         pattern = "\\.zip$", 
@@ -23,8 +23,10 @@ cpi_iw <- read.csv(paste0("DATA/",file_names[[1]]),
 cpi_iw <- cpi_iw[-c(1:4),c(1:3)]
 colnames(cpi_iw) <- c("Time", "Freq", "Value")
 cpi_iw$Time <- as.Date(cpi_iw$Time, format = "%Y%m%d")
+cpi_iw$Value <- as.numeric(cpi_iw$Value)
 cpi_iw <- cpi_iw[cpi_iw$Freq=="M",]
 cpi_iw <- cpi_iw[,-2]
+cpi_iw <- read.zoo(cpi_iw)
 
 ### Real GDP - Base 2011-12 
 gdp_raw <- read.csv(paste0("DATA/",file_names[[2]]),
@@ -32,8 +34,11 @@ gdp_raw <- read.csv(paste0("DATA/",file_names[[2]]),
 gdp_raw <- gdp_raw[-c(1:3),c(1:3)]
 colnames(gdp_raw) <- c("Time", "Freq", "Value")
 gdp_raw$Time <- as.Date(gdp_raw$Time, format = "%Y%m%d")
-gdp_raw <- gdp_raw[gdp_raw$Freq=="Q",]
-gdp_raw <- gdp_raw[,-2]
+gdp_raw$Value <- as.numeric(gdp_raw$Value)
+gdp_raw <- gdp_raw[gdp_raw$Freq=="Q",-2]
+gdp_raw <- read.zoo(na.omit(gdp_raw))
+index(gdp_raw) <- as.yearqtr(index(gdp_raw)) - 3/12
+
 
 ### 3 month (~91-day) T-Bill Yields
 tbill <- read.csv(paste0("DATA/",file_names[[3]]),
@@ -41,22 +46,41 @@ tbill <- read.csv(paste0("DATA/",file_names[[3]]),
 tbill <- tbill[-c(1:3),c(1,2,4)]
 colnames(tbill) <- c("Time", "Freq", "Value")
 tbill$Time <- as.Date(tbill$Time, format = "%Y%m%d")
+tbill$Value <- as.numeric(tbill$Value)
 tbill <- tbill[,-2]
-
+tbill <- read.zoo(na.omit(tbill))
+index(tbill) <- as.yearqtr(index(tbill)) - 3/12
 ############################################################
 
-## 1 seasonally adjusted data,
-## 2 YoY transforms,
-## 3 rolling smoothing,
-## 4 z-scoring,
+## 1 - Seasonally adjust GDP data
 
+gdp_raw_ts <- ts(coredata(gdp_raw), start = c(1996, 1), frequency = 4)
+s_adjust <- seas(gdp_raw_ts)
+gdp_sa <- final(s_adjust)
+
+### Tbill -Not Needed
+### CPI-IW - Monthly to Quarterly
+
+cpi_iw_q <- aggregate(cpi_iw, as.yearqtr, mean)
+index(cpi_iw_q) <- index(cpi_iw_q) - 3/12
+
+### 2 - YoY growth rates
+
+## GDP
+gdp_sa_g <- (gdp_sa - lag(gdp_sa,4)) / gdp_sa
+
+## CPI
+cpi_iw_q_g <- (cpi_iw_q - lag(cpi_iw_q,4)) / cpi_iw_q
+
+### 3 - Rolling/Smoothing
+
+
+### 4 z-scoring,
 scale.data.g <- scale(data.g)
 
-## 5 PCA (optional),
+### 5 PCA (optional)
 
-
-
-## 6 K-means
+### 6 K-means
 
 library(factoextra)
 fviz_nbclust(scale.data.g, kmeans, method = "wss")
