@@ -125,47 +125,98 @@ dat_nCovid
 
 ### Some more specifications
 
+## 4 clusters
+
+scale_dat_nCovid$Cluster <- NULL
+
 km_res3 <- kmeans(scale_dat_nCovid, centers = 4, nstart = 25)
+dat_nCovid2 <- dat_nCovid
+
+dat_nCovid2$Cluster <- as.factor(km_res3$cluster)
+
+dat_nCovid2 |>
+    group_by(Cluster) |>
+    summarise(across(c(gdp_sa_g, cpi_iw_q_g, tbill), mean))
+
+
+## Moving to GMM
+## Using the non-COVID version of our dataset
+library(mclust)
+
+scale_dat_nCovid$Cluster <- NULL
+
+fit_all <- Mclust(scale_dat_nCovid, G = 2:4)
+
+summary(fit_all)
+
+plot(fit_all, what = "BIC")
+
+dat_nCovid$gmm_cluster <- fit_all$classification
+dat_nCovid$gmm_prob <- apply(fit_all$z, 1, max)
+
+aggregate(dat_nCovid[, c("gdp_sa_g", "cpi_iw_q_g", "tbill")],
+          by = list(cluster = dat_nCovid$gmm_cluster),
+          mean)
+
+table(dat_nCovid$gmm_cluster)
+head(round(fit_all$z, 3))
+
+#### 
+library(mclust)
+
+X <-as.data.frame( scale(dat_nCovid[, c("gdp_sa_g", "cpi_iw_q_g", "tbill")]))
+
+bic_grid <- mclustBIC(X, G = 2:4)
+plot(bic_grid)
+
+fit_best <- Mclust(X, x = bic_grid)
+summary(fit_best)
+
+dat_nCovid$gmm_cluster <- fit_best$classification
+
+aggregate(dat_nCovid[, c("gdp_sa_g", "cpi_iw_q_g", "tbill")],
+          by = list(cluster = dat_nCovid$gmm_cluster),
+          mean)
 
 
 
+###
+fit3 <- Mclust(X, G = 3)
+summary(fit3)
+fit3$parameters$pro
+fit3$parameters$mean
+table(fit3$classification)
+
+X$GMM_cluster <- fit3$classification
 
 
+#########################################
+#HMM
+#########################################
 
+library(depmixS4)
 
+set.seed(123)
 
-## This cluster perfectly maps to India's notorious overheating periods characterized by very high inflation and the RBI fighting it with high interest rates.
+hmm_data_sc <- as.data.frame(scale(dat_nCovid[, c("gdp_sa_g", "cpi_iw_q_g", "tbill")]))
 
-##     Historical Footprint: It dominates 1998–1999 (following the Asian Financial Crisis fallout) and completely monopolizes the 2010–2014 era.
+mod2 <- depmix(list(gdp_sa_g ~ 1, cpi_iw_q_g ~ 1, tbill ~ 1),
+               data = hmm_data_sc, nstates = 2,
+               family = list(gaussian(), gaussian(), gaussian()))
+fit2 <- fit(mod2)
 
-##     Economic Reality: The 2010–2014 period was infamous in India for double-digit CPI (often 9% to 15% in your data), driven by massive fiscal stimulus post-2008 and supply-side constraints. The RBI was forced to hold T-bill rates aggressively high (8% to 12%) to tame it.
+mod3 <- depmix(list(gdp_sa_g ~ 1, cpi_iw_q_g ~ 1, tbill ~ 1),
+               data = hmm_data_sc, nstates = 3,
+               family = list(gaussian(), gaussian(), gaussian()))
+fit3 <- fit(mod3)
 
-## Cluster 2: The Stagflationary Slowdown / Easing Regime
+BIC(fit2); BIC(fit3)
 
-## This cluster represents periods of severe growth slowdowns where the RBI slashed interest rates to absolute rock-bottom levels to rescue the economy, even though inflation remained elevated.
+post3 <- posterior(fit3)
+dat_nCovid$hmm3_state <- post3$state
 
-##     Historical Footprint: It appears exclusively during global crisis periods: Q4 2008 to Q4 2009 (the immediate aftermath of the Global Financial Crisis) and 2019 to 2021 (the pre-COVID shadow banking crisis and the COVID recovery phase).
+aggregate(dat_nCovid[, c("gdp_sa_g", "cpi_iw_q_g", "tbill")],
+          by = list(state = dat_nCovid$hmm3_state),
+          mean)
 
-##     Economic Reality: In this regime, T-bill rates collapse to the 3%–5% range. Growth is heavily impaired (even turning negative in 2020 Q2), but inflation often remains sticky and high (8%–13% during the GFC aftermath).
-
-## Cluster 3: The "Goldilocks" Structural Expansion
-
-## This is the dominant regime, representing India's ideal state of structural growth. It captures periods of strong real GDP growth coupled with well-anchored, low inflation and moderate interest rates.
-
-##     Historical Footprint: This cluster perfectly captures the famous 2003–2007 pre-GFC boom, the 2015–2018 macro-stabilization under the new RBI inflation-targeting framework, and the current robust post-COVID expansion (2022–2025).
-
-##     Economic Reality: During these stretches, GDP routinely prints between 7% and 10%. Crucially, CPI is kept well under control (usually between 2% and 6%), allowing the RBI to maintain a neutral T-bill rate (roughly 5.5% to 7%).
-
-## Conclusion
-
-## Your model makes perfect historical sense. The data shows exactly what macroeconomists know about India: it spends most of its time in a high-growth expansion (Cluster 3), occasionally overheats into a high-inflation/high-rate environment (Cluster 1), and requires aggressive low-rate bailouts during global shocks (Cluster 2).
-
-## Given that the historical mapping is this clean, what is the ultimate goal for this dataset? Are you using this to build an investment strategy, or is it for macroeconomic policy analysis?
-
-
-## From GPT: 
-## With COVID included, k=4k=4 produces a singleton cluster, indicating an outlier-driven partition.
-
-## Excluding the flagged quarters yields more persistent and economically interpretable regimes.
-
-## Therefore, the baseline analysis focuses on recurring regimes, with full-sample results treated as a robustness check
+table(dat_nCovid$hmm3_state)
