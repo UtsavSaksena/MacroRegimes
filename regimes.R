@@ -3,23 +3,38 @@ library(tidyr)
 library(zoo)
 library(seasonal)
 
+## Function to exctract .txt files and rename them
+extract_rename <- function () {
+
+## List of all CMIE files downloaded (.zip extention)
 zip_files <- as.list(list.files(path = "DATA", 
                         pattern = "\\.zip$", 
                         full.names = TRUE)
                      )
-
+## Extract .txt files from the .zip and rename to name of .zip file (for identification)
 file_names = list()
-
 for(i in 1:length(zip_files)) {
-    file_names[i] = unzip(zip_files[[i]], list = TRUE)$Name
+    unzip(zip_files[[i]], exdir = "DATA")
+    old_name = unzip(zip_files[[i]], list = TRUE)$Name
+    new_name <- gsub(".zip", ".txt", zip_files[[i]])
+    file.rename(from = paste0("DATA/", old_name),
+                to = new_name)
+    }
+
+## List all .txt files
+txt_files <- as.list(list.files(path = "DATA",
+                                pattern = "\\.txt",
+                                full.names = TRUE)
+                     )
+    return(txt_files)
 }
 
-lapply(zip_files, unzip, exdir = "DATA")
+##############################################################
 
+txt_files_list <- extract_rename()
 
 ### CPI Industrial Workers (levels)
-cpi_iw <- read.csv(paste0("DATA/",file_names[[1]]),
-                   header = FALSE, sep = "|")
+cpi_iw <- read.csv(txt_files_list[[1]], header = FALSE, sep = "|")
 cpi_iw <- cpi_iw[-c(1:4),c(1:3)]
 colnames(cpi_iw) <- c("Time", "Freq", "Value")
 cpi_iw$Time <- as.Date(cpi_iw$Time, format = "%Y%m%d")
@@ -27,56 +42,128 @@ cpi_iw$Value <- as.numeric(cpi_iw$Value)
 cpi_iw <- cpi_iw[cpi_iw$Freq=="M",]
 cpi_iw <- cpi_iw[,-2]
 cpi_iw <- read.zoo(cpi_iw)
+cpi_iw <- window(cpi_iw, start = as.Date("1996-04-30")) ##FY 1996
+cpi_iw_g1 <- ((cpi_iw - lag(cpi_iw, -12)) / lag(cpi_iw, -12)) * 100 
 
 ### Real GDP - Base 2011-12 
-gdp_raw <- read.csv(paste0("DATA/",file_names[[2]]),
-                   header = FALSE, sep = "|")
+gdp_raw <- read.csv(txt_files_list[[2]], header = FALSE, sep = "|")
 gdp_raw <- gdp_raw[-c(1:3),c(1:3)]
 colnames(gdp_raw) <- c("Time", "Freq", "Value")
 gdp_raw$Time <- as.Date(gdp_raw$Time, format = "%Y%m%d")
 gdp_raw$Value <- as.numeric(gdp_raw$Value)
 gdp_raw <- gdp_raw[gdp_raw$Freq=="Q",-2]
 gdp_raw <- read.zoo(na.omit(gdp_raw))
-index(gdp_raw) <- as.yearqtr(index(gdp_raw)) - 3/12
+index(gdp_raw) <- as.yearqtr(index(gdp_raw)) - 3/12 + 1
+gdp_raw <- window(gdp_raw, start = as.yearqtr("1997 Q1"))
 
 ### 3 month (~91-day) T-Bill Yields
-tbill <- read.csv(paste0("DATA/",file_names[[3]]),
-                   header = FALSE, sep = "|")
+tbill <- read.csv(txt_files_list[[3]], header = FALSE, sep = "|")
 tbill <- tbill[-c(1:3),c(1,2,4)]
 colnames(tbill) <- c("Time", "Freq", "Value")
 tbill$Time <- as.Date(tbill$Time, format = "%Y%m%d")
 tbill$Value <- as.numeric(tbill$Value)
 tbill <- tbill[,-2]
 tbill <- read.zoo(na.omit(tbill))
-index(tbill) <- as.yearqtr(index(tbill)) - 3/12
+index(tbill) <- as.yearqtr(index(tbill)) - 3/12 + 1
+tbill <- window(tbill, start = as.yearqtr("1998 Q1"))
+
 ############################################################
 
-## 1 - Seasonally adjust GDP data
+## Seasonally Adjust GDP data
 
-gdp_raw_ts <- ts(coredata(gdp_raw), start = c(1996, 1), frequency = 4)
+gdp_raw_ts <- ts(coredata(gdp_raw), start = c(1997, 1), frequency = 4)
 s_adjust <- seas(gdp_raw_ts)
 gdp_sa <- final(s_adjust)
+gdp_sa <- as.zoo(gdp_sa)
 
-### Tbill -Not Needed
+### TBill - Not Needed
 ### CPI-IW - Monthly to Quarterly
 
 cpi_iw_q <- aggregate(cpi_iw, as.yearqtr, mean)
-index(cpi_iw_q) <- index(cpi_iw_q) 
+index(cpi_iw_q) <- index(cpi_iw_q) - 3/12 + 1
 
 ### 2 - YoY growth rates
 
 ## GDP
-gdp_sa_g <- as.zoo(((gdp_sa - lag(gdp_sa,-4)) / lag(gdp_sa,-4)) * 100)
+gdp_sa_g <- ((gdp_sa - lag(gdp_sa,-4)) / lag(gdp_sa,-4)) * 100
 
 ## CPI
 cpi_iw_q_g <- ((cpi_iw_q - lag(cpi_iw_q,-4)) / lag(cpi_iw_q,-4)) * 100
 
+### Alternative specification
+cpi_iw_g1_q <- aggregate(cpi_iw_g1, as.yearqtr, mean)
+index(cpi_iw_g1_q) <- index(cpi_iw_g1_q) - 3/12 + 1
+
+## T-Bill 
+# No SA for now 
+
+## Test for stationarity
+
+library(tseries)
+adf.test(gdp_sa_g) #stationary after SA and y-o-y differencing
+adf.test(cpi_iw_q_g) #not stationary after y-o-y differencing
+adf.test(cpi_iw_g1_q) #not stationary y-o-y monthly growth, and then averaged 
+adf.test(tbill) #not stationary
+
+pacf(cpi_iw_g1_q)
+
+## Advanced tests for stationarity
+library(urca)
+
+summary(ur.df(cpi_iw_g1_q,
+              type="none",
+              lags=4))
+
+summary(ur.df(cpi_iw_g1_q,
+              type="drift",
+              lags=4))
+
+summary(ur.df(cpi_iw_g1_q,
+              type="trend",
+              lags=4))
+
+summary(ur.za(cpi_iw_g1_q))
+
+
+library(strucchange)
+
+## BP Test
+# GDP
+bp_gdp_g <- breakpoints(gdp_sa_g ~ 1)
+index(gdp_sa_g)[c(79,96)]
+confint(bp_gdp_g)
+summary(bp_gdp_g)
+
+#CPI IW
+bp_cpi_g <- breakpoints(cpi_iw_g1_q ~ 1)
+index(cpi_iw_g1_q)[c(45,67)]
+confint(bp_cpi_g)
+summary(bp_cpi_g)
+
+
+##TBill
+bp_tbill <- breakpoints(tbill ~ 1)
+index(tbill)[c(17,56,76)]
+confint(bp_tbill)
+summary(bp_tbill)
+
+
+## ## Chow Test 
+## sctest(gdp_sa ~ trend(gdp_sa), "Chow",
+##        point = which(index(gdp_sa) == as.yearqtr("2009 Q2")) )
+
 ### 3 - Rolling/Smoothing
 ## Not doing this just yet
 
+
+
+#############################################
+#####        MACHINE LEARNING     ##########
+############################################
+
 ### -> Single object dataframe
 
-dat <- na.omit(cbind(gdp_sa_g, cpi_iw_q_g, tbill))
+dat <- na.omit(cbind(gdp_sa_g, cpi_iw_g1_q, tbill))
 
 ### 4 z-scores
 scale_dat <- as.data.frame(scale(dat))
@@ -89,13 +176,14 @@ scale_dat_nCovid <- scale_dat[!(rownames(scale_dat) %in% c("2020 Q1","2021 Q1","
 ### 6 K-means
 
 library(factoextra)
+set.seed(300)
 
 ## Witn COVID
 fviz_nbclust(scale_dat, kmeans, method = "wss")
 fviz_nbclust(scale_dat, kmeans, method = "silhouette")
 fviz_nbclust(scale_dat, kmeans, method = "gap_stat")
 
-km_res <- kmeans(scale_dat, centers = 4, nstart = 25)
+km_res <- kmeans(scale_dat, centers = 3, nstart = 25)
 
 ## Without COVID outliers
 fviz_nbclust(scale_dat_nCovid, kmeans, method = "wss")
@@ -105,8 +193,13 @@ fviz_nbclust(scale_dat_nCovid, kmeans, method = "gap_stat")
 km_res2 <- kmeans(scale_dat_nCovid, centers = 3, nstart = 25)
 
 ## Map it to the original dataset
-scale_dat$Cluster <- as.factor(km_res$cluster)
-summary(scale_dat$Cluster)
+viz_dat <- dat
+viz_dat$Cluster <- as.factor(km_res$cluster)
+summary(viz_dat$Cluster)
+
+as.data.frame(viz_dat) |>
+    group_by(Cluster) |>
+    summarise(across(c(gdp_sa_g, cpi_iw_g1_q, tbill), mean))
 
 scale_dat_nCovid$Cluster <- as.factor(km_res2$cluster)
 summary(scale_dat_nCovid$Cluster)
