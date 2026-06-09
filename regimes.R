@@ -1,5 +1,6 @@
 source("dataPrep.R")
 library(factoextra)
+library(DescTools)
 
 #############################################
 ############  MACHINE LEARNING ##############
@@ -17,7 +18,7 @@ scale_dat <- scale(dat)
 
 scale_dat_nCovid <- scale_dat[!(rownames(scale_dat) %in% c("2020 Q1","2021 Q1","2021 Q2")),]
 
-### 6 K-means
+### K-means
 set.seed(300)
 
 ## Witn COVID
@@ -25,21 +26,19 @@ fviz_nbclust(scale_dat, kmeans, method = "wss")
 fviz_nbclust(scale_dat, kmeans, method = "silhouette")
 fviz_nbclust(scale_dat, kmeans, method = "gap_stat")
 
-km_res <- kmeans(scale_dat, centers = 3, nstart = 50)
+km_res <- kmeans(scale_dat, centers = 5, nstart = 50)
 
 fviz_cluster(km_res, scale_dat) 
-
 
 library(dbscan)
 
 kNNdistplot(scale_dat, k = 5)
 abline(h = 1.5, col = "red", lty = 2) 
 
+db_result <- dbscan(scale_dat, eps = 1.5, minPts = 5) 
+db_result |> summary()
 
-db_result <- dbscan(scale_dat, eps = 1, minPts = 4) 
-db_result
-
-hdb_result <- hdbscan(scale_dat, minPts = 4)
+hdb_result <- hdbscan(scale_dat, minPts = 5)
 
 viz_dat <- dat
 
@@ -52,77 +51,7 @@ as.data.frame(viz_dat) |>
     group_by(HDBCluster) |>
     summarise(across(c(gdp_sa_g, cpi_iw_g1_q, tbill), mean))
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-## Without COVID outliers
-fviz_nbclust(scale_dat_nCovid, kmeans, method = "wss")
-fviz_nbclust(scale_dat_nCovid, kmeans, method = "silhouette")
-fviz_nbclust(scale_dat_nCovid, kmeans, method = "gap_stat")
-
-km_res2 <- kmeans(scale_dat_nCovid, centers = 3, nstart = 25)
-
-## Map it to the original dataset
-viz_dat <- dat
-viz_dat$Cluster <- as.factor(km_res$cluster)
-summary(viz_dat$Cluster)
-
-as.data.frame(viz_dat) |>
-    group_by(Cluster) |>
-    summarise(across(c(gdp_sa_g, cpi_iw_g1_q, tbill), mean))
-
-scale_dat_nCovid$Cluster <- as.factor(km_res2$cluster)
-summary(scale_dat_nCovid$Cluster)
-
-## Seeing what these clusters look like 
-
-### Non-scaled data w/o COVID
-dat_nCovid <- as.data.frame(dat[!(rownames(scale_dat) %in% c("2020 Q1","2021 Q1","2021 Q2")),])
-dat_nCovid$Cluster <- as.factor(km_res2$cluster)
-
-dat_nCovid |>
-    group_by(Cluster) |>
-    summarise(across(c(gdp_sa_g, cpi_iw_q_g, tbill), mean))
-
-### Some more specifications
-
-#### 4 clusters
-
-km_res4clus <- kmeans(scale_dat, centers = 4, nstart = 25)
-viz_dat <- as.data.frame(dat)
-viz_dat$Cluster <- as.factor(km_res4clus$cluster)
-
-viz_dat |>
-    group_by(Cluster) |>
-    summarise(across(c(gdp_sa_g, cpi_iw_g1_q, tbill), mean))
-summary(viz_dat$Cluster)
-
-#### Non Covid
-scale_dat_nCovid$Cluster <- NULL
-
-km_res3 <- kmeans(scale_dat_nCovid, centers = 4, nstart = 25)
-dat_nCovid2 <- dat_nCovid
-
-dat_nCovid2$Cluster <- as.factor(km_res3$cluster)
-
-dat_nCovid2 |>
-    group_by(Cluster) |>
-    summarise(across(c(gdp_sa_g, cpi_iw_q_g, tbill), mean))
-
-
-## 7 Moving to GMM
+## Moving to GMM
 library(mclust)
 
 fit_all <- Mclust(scale_dat)
@@ -138,8 +67,8 @@ dat_viz |>
     group_by(gmm_cluster) |>
     summarise(across(c(gdp_sa_g, cpi_iw_g1_q, tbill), mean))
 
-table(dat_$gmm_cluster)
-head(round(fit_all$z, 3))
+table(dat_viz$gmm_cluster)
+head(round(fit_all$z, 3), 100)
 
 #### 
 ## library(mclust)
@@ -173,28 +102,45 @@ head(round(fit_all$z, 3))
 ## HMM
 library(depmixS4)
 
-hmm_data <- as.data.frame(scale(dat))
+hmm_data <- as.data.frame(scale(dat))[1:114,]
 
-mod2 <- depmix(list(na.omit(gdp_sa_g) ~ 1, cpi_iw_q_g ~ 1, tbill ~ 1),
-               data = hmm_data, nstates = 3,
+mod2 <- depmix(list(hmm_data$gdp_sa_g ~ 1, hmm_data$cpi_iw_g1_q ~ 1,
+                    hmm_data$tbill ~ 1),
+               data = hmm_data, nstates = 4,
                family = list(gaussian(), gaussian(), gaussian())
                )
 
 fit2 <- fit(mod2)
+BIC(fit2)
 
-mod3 <- depmix(list(gdp_sa_g ~ 1, cpi_iw_q_g ~ 1, tbill ~ 1),
-               data = hmm_data_sc, nstates = 3,
-               family = list(gaussian(), gaussian(), gaussian()))
+hmm <- posterior(fit2)
 
-fit3 <- fit(mod3)
+viz_dat$hmm <- as.factor(hmm$state)
 
-BIC(fit2); BIC(fit3)
+summary(viz_dat$hmm)
 
-post3 <- posterior(fit3)
-dat_nCovid$hmm3_state <- post3$state
+viz_dat |>
+    group_by(hmm) |>
+    summarise(across(c(gdp_sa_g, cpi_iw_g1_q, tbill), mean))
 
-aggregate(dat_nCovid[, c("gdp_sa_g", "cpi_iw_q_g", "tbill")],
-          by = list(state = dat_nCovid$hmm3_state),
-          mean)
 
-table(dat_nCovid$hmm3_state)
+
+###########################################################################
+
+library(plotly)
+library(scatterplot3d)
+
+fig <- plot_ly(viz_dat, x = ~gdp_sa_g, y = ~cpi_iw_g1_q, z = ~tbill,
+               color = ~Cluster) |>
+    add_markers() |>
+    layout(scene = list(xaxis = list(title = 'GDP'),
+                     yaxis = list(title = 'Inflation'),
+                     zaxis = list(title = 'T-Bill Yield'))
+           )
+
+
+scatterplot3d(x = viz_dat$gdp_sa_g,
+              y = viz_dat$cpi_iw_g1_q,
+              z = viz_dat$tbill, pch = 10,
+              highlight.3d = TRUE)
+
